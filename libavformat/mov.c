@@ -1178,6 +1178,27 @@ static int mov_read_ares(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return mov_read_avid(c, pb, atom);
 }
 
+static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    int ret = mov_read_avid(c, pb, atom); // should we do this or read the atom directly using avio_*() and not store it in extradata?
+    if (c->fc->nb_streams >= 1) {
+        AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
+        if (codec->extradata_size == 24)
+        {        
+            switch (codec->extradata[19]) {
+            case 1:
+                codec->color_range = AVCOL_RANGE_MPEG;
+                break;
+            case 2:
+                codec->color_range = AVCOL_RANGE_JPEG;
+                break;
+            }
+        }
+    }
+
+    return ret;
+}
+
 static int mov_read_svq3(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     return mov_read_extradata(c, pb, atom, AV_CODEC_ID_SVQ3);
@@ -3390,7 +3411,7 @@ static int mov_read_free(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 }
 
 static const MOVParseTableEntry mov_default_parse_table[] = {
-{ MKTAG('A','C','L','R'), mov_read_avid },
+{ MKTAG('A','C','L','R'), mov_read_aclr },
 { MKTAG('A','P','R','G'), mov_read_avid },
 { MKTAG('A','A','L','P'), mov_read_avid },
 { MKTAG('A','R','E','S'), mov_read_ares },
