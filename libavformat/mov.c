@@ -1183,8 +1183,7 @@ static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int ret = mov_read_avid(c, pb, atom);
     if (c->fc->nb_streams >= 1) {
         AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
-        if (codec->extradata_size == 24)
-        {        
+        if (codec->extradata_size == 24) { // bit ugly assumes we are the first entry in the extra data
             switch (codec->extradata[19]) {
             case 1:
                 codec->color_range = AVCOL_RANGE_MPEG;
@@ -1192,7 +1191,12 @@ static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             case 2:
                 codec->color_range = AVCOL_RANGE_JPEG;
                 break;
+            default:
+                av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", codec->extradata[19]);
+                break;
             }
+        } else {
+            av_log(c, AV_LOG_WARNING, "aclr not decoded\n");
         }
     }
 
