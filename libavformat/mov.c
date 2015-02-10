@@ -1180,7 +1180,7 @@ static int mov_read_ares(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
 static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
-    int ret = mov_read_avid(c, pb, atom); // should we do this or read the atom directly using avio_*() and not store it in extradata?
+    int ret = mov_read_avid(c, pb, atom);
     if (c->fc->nb_streams >= 1) {
         AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
         if (codec->extradata_size == 24)
