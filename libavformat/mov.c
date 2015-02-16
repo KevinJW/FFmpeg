@@ -1195,6 +1195,7 @@ static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
                 av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", codec->extradata[19]);
                 break;
             }
+            av_dlog(c, "color_range %"PRIu8"\n", codec->color_range);
         } else {
             av_log(c, AV_LOG_WARNING, "aclr not decoded\n");
         }
