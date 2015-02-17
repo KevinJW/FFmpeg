@@ -1183,23 +1183,27 @@ static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int ret = mov_read_avid(c, pb, atom);
 
     if (!ret && c->fc->nb_streams >= 1) {
+        AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
         if (atom.size == 16) {
-            AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
-            
-            /* This assumes the atom will be at the end of the extradata */
-            const uint8_t range_value = codec->extradata[codec->extradata_size - 5];
-            switch (range_value) {
-            case 1:
-                codec->color_range = AVCOL_RANGE_MPEG;
-                break;
-            case 2:
-                codec->color_range = AVCOL_RANGE_JPEG;
-                break;
-            default:
-                av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", range_value);
-                break;
+            if (codec->extradata_size >= atom.size + 8) {
+                /* This assumes the atom will be at the end of the extradata */
+                const uint8_t range_value = codec->extradata[codec->extradata_size - 5];
+                switch (range_value) {
+                case 1:
+                    codec->color_range = AVCOL_RANGE_MPEG;
+                    break;
+                case 2:
+                    codec->color_range = AVCOL_RANGE_JPEG;
+                    break;
+                default:
+                    av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", range_value);
+                    break;
+                }
+                av_dlog(c, "color_range: %"PRIu8"\n", codec->color_range);
+            } else {
+              /* For some reason the whole atom was not added to the extradata */
+              av_log(c, AV_LOG_ERROR, "aclr not decoded - incomplete extradata size %d\n", codec->extradata_size);
             }
-            av_dlog(c, "color_range: %"PRIu8"\n", codec->color_range);
         } else {
             av_log(c, AV_LOG_WARNING, "aclr not decoded - unexpected size %ld\n", atom.size);
         }
