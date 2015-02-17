@@ -1181,10 +1181,14 @@ static int mov_read_ares(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     int ret = mov_read_avid(c, pb, atom);
-    if (c->fc->nb_streams >= 1) {
-        AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
-        if (codec->extradata_size == 24) { // bit ugly assumes we are the first entry in the extra data
-            switch (codec->extradata[19]) {
+
+    if (!ret && c->fc->nb_streams >= 1) {
+        if (atom.size == 16) {
+            AVCodecContext *codec = c->fc->streams[c->fc->nb_streams-1]->codec;
+            
+            /* This assumes the atom will be at the end of the extradata */
+            const uint8_t range_value = codec->extradata[codec->extradata_size - 5];
+            switch (range_value) {
             case 1:
                 codec->color_range = AVCOL_RANGE_MPEG;
                 break;
@@ -1192,12 +1196,12 @@ static int mov_read_aclr(MOVContext *c, AVIOContext *pb, MOVAtom atom)
                 codec->color_range = AVCOL_RANGE_JPEG;
                 break;
             default:
-                av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", codec->extradata[19]);
+                av_log(c, AV_LOG_WARNING, "unknown aclr value (%d)\n", range_value);
                 break;
             }
-            av_dlog(c, "color_range %"PRIu8"\n", codec->color_range);
+            av_dlog(c, "color_range: %"PRIu8"\n", codec->color_range);
         } else {
-            av_log(c, AV_LOG_WARNING, "aclr not decoded\n");
+            av_log(c, AV_LOG_WARNING, "aclr not decoded - unexpected size %ld\n", atom.size);
         }
     }
 
