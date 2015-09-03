@@ -265,6 +265,7 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     uint32_t data_type = 0, str_size, str_size_alloc;
     int (*parse)(MOVContext*, AVIOContext*, unsigned, const char*) = NULL;
     int raw = 0;
+    AVDictionaryEntry *entry = NULL;
 
     switch (atom.type) {
     case MKTAG( '@','P','R','M'): key = "premiere_version"; raw = 1; break;
@@ -351,6 +352,13 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     case MKTAG(0xa9,'w','r','n'): key = "warning";   break;
     case MKTAG(0xa9,'w','r','t'): key = "composer";  break;
     case MKTAG(0xa9,'x','y','z'): key = "location";  break;
+    default:
+        snprintf(key2, sizeof(key2), "%08x", atom.type);
+        entry = av_dict_get(c->keys_d, key2, entry, 0);
+        if (entry)
+            key = entry->value;
+        av_log(c->fc, AV_LOG_TRACE, "Attempting to match unknown atom type %08x %s in keys => '%s'\n", atom.type, key2, key);
+        break;
     }
 retry:
     if (c->itunes_metadata && atom.size > 8) {
@@ -3184,6 +3192,58 @@ static int mov_read_meta(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
+static int mov_read_keys(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    AVDictionaryEntry *entry = NULL;
+    uint32_t key_count, key_size, key_namespace, key_num;
+    char *key_str;
+    char key_num_str[8+1] = { 0 }; // Use hexadecimal string of a 32 bit integer + terminator
+    int ret;
+
+    avio_r8(pb); /* version */
+    avio_rb24(pb); /* flags */
+    key_count = avio_rb32(pb);
+    
+    av_log(c->fc, AV_LOG_VERBOSE,
+           "Reading keys sz: %"PRId64" %u\n", atom.size, key_count);
+
+    key_num = 1; // Keys are numbered from 1 and refered to in the ilst following.
+    while (key_count--) {
+        key_size = avio_rb32(pb) - 8;
+        key_namespace = avio_rl32(pb);
+        if (key_namespace == MKTAG('m','d','t','a')) {
+            key_str = av_malloc(key_size + 1); /* Add null terminator */
+            if (!key_str) {
+                return AVERROR(ENOMEM);
+            }
+
+            ret = ffio_read_size(pb, key_str, key_size);
+            if (ret < 0) {
+                av_freep(&key_str);
+                return ret;
+            }
+            
+            key_str[key_size] = 0;
+            if (key_str[0]) {
+                snprintf(key_num_str, sizeof(key_num_str), "%08x", av_be2ne32(key_num));
+                av_dict_set(&(c->keys_d), key_num_str, key_str, 0);
+            }
+            av_freep(&key_str);
+        } else {
+            // Don't know what to do with other namespaces... ignore
+            avio_seek(pb, key_size, SEEK_CUR);
+        }
+        ++key_num;
+    }
+
+    while (entry = av_dict_get(c->keys_d, "", entry, AV_DICT_IGNORE_SUFFIX)) {
+            av_log(c->fc, AV_LOG_TRACE,
+                   "Read metadata key %s: '%s'\n", entry->key, entry->value);
+    }
+
+    return 0;
+}
+
 static int mov_read_tkhd(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     int i;
@@ -3786,6 +3846,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('h','d','l','r'), mov_read_hdlr },
 { MKTAG('i','l','s','t'), mov_read_ilst },
 { MKTAG('j','p','2','h'), mov_read_jp2h },
+{ MKTAG('k','e','y','s'), mov_read_keys },
 { MKTAG('m','d','a','t'), mov_read_mdat },
 { MKTAG('m','d','h','d'), mov_read_mdhd },
 { MKTAG('m','d','i','a'), mov_read_default },
@@ -4203,6 +4264,8 @@ static int mov_read_close(AVFormatContext *s)
     av_freep(&mov->fragment_index_data);
 
     av_freep(&mov->aes_decrypt);
+    
+    av_dict_free(&mov->keys_d);
 
     return 0;
 }
