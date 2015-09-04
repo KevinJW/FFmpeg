@@ -255,6 +255,88 @@ static int mov_metadata_loci(MOVContext *c, AVIOContext *pb, unsigned len)
     return av_dict_set(&c->fc->metadata, key, buf, 0);
 }
 
+static int mov_read_data_value_int(MOVContext *c, AVIOContext *pb,
+                                        unsigned len, const char *key)
+{
+    int64_t value = 0;
+    switch (len)
+    {
+        case 1:
+            value = (int64_t) avio_r8(pb);
+            break;
+        case 2:
+            value = (int64_t) avio_rb16(pb);
+            break;
+        case 3:
+            value = (int64_t) avio_rb24(pb);
+            break;
+        case 4:
+            value = (int64_t) avio_rb32(pb);
+            break;
+        case 8:
+            value = (int64_t) avio_rb64(pb);
+            break;
+    }
+
+    c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+    return av_dict_set_int(&c->fc->metadata, key, value, 0);
+}
+
+static int mov_read_data_value_uint(MOVContext *c, AVIOContext *pb,
+                                        unsigned len, const char *key)
+{
+    uint64_t value = 0;
+    char valuestr[22];
+    switch (len)
+    {
+        case 1:
+            value = avio_r8(pb);
+            break;
+        case 2:
+            value = avio_rb16(pb);
+            break;
+        case 3:
+            value = avio_rb24(pb);
+            break;
+        case 4:
+            value = avio_rb32(pb);
+            break;
+        case 8:
+            value = avio_rb64(pb);
+            break;
+    }
+    snprintf(valuestr, sizeof(valuestr), "%"PRIu64, value);
+
+    c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+    return av_dict_set(&c->fc->metadata, key, valuestr, 0);
+}
+
+static int mov_read_data_value_float32(MOVContext *c, AVIOContext *pb,
+                                        unsigned len, const char *key)
+{
+    union av_intfloat32 value;
+    char valuestr[17]; // sign + 1 + point + 8 + e + sign + 3 + term
+ 
+    value.i = avio_rb32(pb);
+    snprintf(valuestr, sizeof(valuestr), "%.9g", value.f);
+ 
+    c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+    return av_dict_set(&c->fc->metadata, key, valuestr, 0);
+}
+
+static int mov_read_data_value_float64(MOVContext *c, AVIOContext *pb,
+                                        unsigned len, const char *key)
+{
+    union av_intfloat64 value;
+    char valuestr[26]; // sign + 1 + point + 16 + e + sign + 4 + term
+
+    value.i = avio_rb64(pb);
+    snprintf(valuestr, sizeof(valuestr), "%.9g", value.f);
+ 
+    c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+    return av_dict_set(&c->fc->metadata, key, valuestr, 0);
+}
+
 static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     char tmp_key[5];
@@ -262,9 +344,10 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     char *str = NULL;
     const char *key = NULL;
     uint16_t langcode = 0;
-    uint32_t data_type = 0, str_size, str_size_alloc;
+    uint32_t data_type = 0, data_locale = 0, str_size, str_size_alloc;
     int (*parse)(MOVContext*, AVIOContext*, unsigned, const char*) = NULL;
     int raw = 0;
+    int ret = 0;
     AVDictionaryEntry *entry = NULL;
 
     switch (atom.type) {
@@ -357,7 +440,7 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         entry = av_dict_get(c->keys_d, key2, entry, 0);
         if (entry)
             key = entry->value;
-        av_log(c->fc, AV_LOG_TRACE, "Attempting to match unknown atom type %08x %s in keys => '%s'\n", atom.type, key2, key);
+        av_log(c->fc, AV_LOG_TRACE, "Attempting to match unknown atom type %08x %.4s %s in keys => '%s'\n", atom.type, (char*)&atom.type, key2, key);
         break;
     }
 retry:
@@ -366,7 +449,7 @@ retry:
         int tag = avio_rl32(pb);
         if (tag == MKTAG('d','a','t','a') && data_size <= atom.size) {
             data_type = avio_rb32(pb); // type
-            avio_rb32(pb); // unknown
+            data_locale = avio_rb32(pb); // locale
             str_size = data_size - 16;
             atom.size -= 16;
 
@@ -399,6 +482,62 @@ retry:
 
     if (!key)
         return 0;
+
+    av_log(c->fc, AV_LOG_TRACE, "Found '%s' %u %u\n", key, str_size, data_type);
+    switch (data_type)
+    {
+        case 0:  // Reserved
+        case 1:  // UTF-8
+        case 2:  // UTF-16
+        case 3:  // S/JIS
+        case 4:  // UTF-8 machine sortable
+        case 5:  // UTF-16 machine sortable
+            break;
+        case 21: // BE signed int
+        case 65: // 8-bit Signed Integer
+        case 66: // BE 16-bit Signed Integer
+        case 67: // BE 32-bit Signed Integer
+        case 74: // BE 64-bit Signed Integer
+            if ((str_size > 0 && str_size < 5) || (str_size == 8)) {
+                parse = mov_read_data_value_int;
+            }
+            break;
+        case 22: // BE unsigned int
+        case 75: // BE 8-bit Unsigned Integer
+        case 76: // BE 16-bit Unsigned Integer
+        case 77: // BE 32-bit Unsigned Integer
+        case 78: // BE 64-bit Unsigned Integer
+            if ((str_size > 0 && str_size < 5) || (str_size == 8)) {
+                parse = mov_read_data_value_uint;
+            }
+            break;
+        case 23: // BE float 32
+            if (str_size == 4) {
+                parse = mov_read_data_value_float32;
+            }
+            break;
+        case 24: // BE float 64
+            if (str_size == 8) {
+                parse = mov_read_data_value_float64;
+            }
+            break;
+        case 13: // JPEG
+        case 14: // PNG
+        case 27: // BMP
+            av_log(c->fc, AV_LOG_TRACE, "Unsupported data value '%s' %u %u - image type\n", key, str_size, data_type);
+            break;
+        case 28: // QuickTime Metadata atom
+        case 70: // BE PointF32 2D x, y
+        case 71: // BE DimensionsF32 2D width, height
+        case 72: // BE RectF32 2D Rectangle x, y, width, height
+        case 79: // AffineTransformF64 matrix BEFloat64[3][3]
+            av_log(c->fc, AV_LOG_TRACE, "Unsupported data value '%s' %u %u\n", key, str_size, data_type);
+            break;
+        default:
+            av_log(c->fc, AV_LOG_TRACE, "Unknown data value '%s' %u %u\n", key, str_size, data_type);
+            break;
+    }
+
     if (atom.size < 0 || str_size >= INT_MAX/2)
         return AVERROR_INVALIDDATA;
 
@@ -409,12 +548,12 @@ retry:
         return AVERROR(ENOMEM);
 
     if (parse)
-        parse(c, pb, str_size, key);
+        ret = parse(c, pb, str_size, key);
     else {
         if (!raw && (data_type == 3 || (data_type == 0 && (langcode < 0x400 || langcode == 0x7fff)))) { // MAC Encoded
-            mov_read_mac_string(c, pb, str_size, str, str_size_alloc);
+            ret = mov_read_mac_string(c, pb, str_size, str, str_size_alloc);
         } else {
-            int ret = ffio_read_size(pb, str, str_size);
+            ret = ffio_read_size(pb, str, str_size);
             if (ret < 0) {
                 av_free(str);
                 return ret;
@@ -433,7 +572,7 @@ retry:
             key, str, (char*)&atom.type, str_size_alloc, atom.size);
 
     av_freep(&str);
-    return 0;
+    return ret;
 }
 
 static int mov_read_chpl(MOVContext *c, AVIOContext *pb, MOVAtom atom)
@@ -3207,11 +3346,12 @@ static int mov_read_keys(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     av_log(c->fc, AV_LOG_VERBOSE,
            "Reading keys sz: %"PRId64" %u\n", atom.size, key_count);
 
-    key_num = 1; // Keys are numbered from 1 and refered to in the ilst following.
-    while (key_count--) {
-        key_size = avio_rb32(pb) - 8;
+    // Note: keys are numbered from 1 and refered to by number in the ilst following.
+    for (key_num = 1; key_num <= key_count; ++key_num) {
+        key_size = avio_rb32(pb);
         key_namespace = avio_rl32(pb);
-        if (key_namespace == MKTAG('m','d','t','a')) {
+        if (key_size > 8 && key_namespace == MKTAG('m','d','t','a')) {
+            key_size -= 8;
             key_str = av_malloc(key_size + 1); /* Add null terminator */
             if (!key_str) {
                 return AVERROR(ENOMEM);
@@ -3230,10 +3370,9 @@ static int mov_read_keys(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             }
             av_freep(&key_str);
         } else {
-            // Don't know what to do with other namespaces... ignore
+            // Don't know what to do with small keys or other namespaces... ignore
             avio_seek(pb, key_size, SEEK_CUR);
         }
-        ++key_num;
     }
 
     while (entry = av_dict_get(c->keys_d, "", entry, AV_DICT_IGNORE_SUFFIX)) {
