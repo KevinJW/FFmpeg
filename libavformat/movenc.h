@@ -205,6 +205,7 @@ typedef struct MOVMuxContext {
     AVIOContext *mdat_buf;
     int first_trun;
 
+    int mov_timescale;
     int video_track_timescale;
 
     int reserved_moov_size; ///< 0 for disabled, -1 for automatic, size otherwise
