@@ -6208,6 +6208,70 @@ static int mov_create_dvd_sub_decoder_specific_info(MOVTrack *track,
     return 0;
 }
 
+static int mov_determine_movie_timescale(AVFormatContext *s, MOVMuxContext *mov)
+{
+    // Assume typical integer frame rates:
+    // 600 is a common multiple of 24, 25, 30, 50, 60, etc.
+    // see p221, https://developer.apple.com/standards/qtff-2001.pdf
+    int timescale = 600;
+    AVRational temp;
+    int exact;
+    int first_video_track = 1;
+
+    // If the user specified a timescale, just use it as-is
+    if (mov->mov_timescale > 0) {
+        return mov->mov_timescale;
+    }
+
+    // Determine the timescale, based on the video stream time_base values
+    for (int i = 0; i < s->nb_streams; i++) {
+        AVStream *st = s->streams[i];
+        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+
+            // If the first video track is not an integer, use its denominator
+            // as the basis of the remaining calculations
+            if (first_video_track && st->time_base.num != 1) {
+                timescale = st->time_base.den;
+                av_log(s, AV_LOG_VERBOSE, "Using first video stream non-integer time_base: %d/%d\n",
+                       st->time_base.den, st->time_base.num);
+            }
+
+            // determine if we can make an even multiple of the current timescale and the video track
+            av_log(s, AV_LOG_VERBOSE, "Current estimated timescale: %d\n", timescale);
+            av_log(s, AV_LOG_TRACE, "Stream #%d time_base: %d/%d\n", i,
+                   st->time_base.num, st->time_base.den);
+
+            // Try keep the time_scale within a sensible bound
+            exact = av_reduce(&temp.num, &temp.den,
+                              (int64_t)timescale * st->time_base.num,
+                              st->time_base.den,
+                              MOV_MAX_AUTO_TIMESCALE);
+
+            // Use a scaled version of the timescale
+            if (exact) {
+                timescale *= temp.den;
+                av_log(s, AV_LOG_TRACE, "Adjusted timescale: %d/%d %d\n",
+                       temp.den, temp.num, timescale);
+            } else {
+                // We overflowed try the denominator as is
+                timescale = temp.den;
+                av_log(s, AV_LOG_WARNING, "Timescale calculation out of bounds approximating %d/%d %d\n",
+                       temp.den, temp.num, timescale);
+            }
+
+            if (first_video_track && ((timescale > MOV_MAX_AUTO_TIMESCALE) || !exact)) {
+                timescale = st->time_base.den;
+                av_log(s, AV_LOG_WARNING, "Potentially large timescale, "
+                                          "using first video stream time_base: %d/%d\n",
+                       st->time_base.den, st->time_base.num);
+            }
+            first_video_track = 0;
+        }
+    }
+    av_log(s, AV_LOG_VERBOSE, "Final timescale: %d\n", timescale);
+    return timescale;
+}
+
 static int mov_init(AVFormatContext *s)
 {
     MOVMuxContext *mov = s->priv_data;
@@ -6264,6 +6328,13 @@ static int mov_init(AVFormatContext *s)
 
     if (mov->flags & FF_MOV_FLAG_FASTSTART) {
         mov->reserved_moov_size = -1;
+    }
+
+    mov->mov_timescale = mov_determine_movie_timescale(s, mov);
+    if (mov->mov_timescale > MOV_MAX_AUTO_TIMESCALE) {
+        av_log(s, AV_LOG_WARNING, "Potentially large timescale %d, use "
+                                  "-mov_timescale if you have issues\n",
+                                  mov->mov_timescale);
     }
 
     if (mov->use_editlist < 0) {
